@@ -7,13 +7,14 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:wpf="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
     Title="MainWindow"
-    Width="800"
-    Height="450"
+    Width="1024"
+    Height="768"
     Closed="Window_Closed"
     Loaded="Window_Loaded"
-    WindowState="Maximized"
+    WindowStartupLocation="CenterScreen"
+    WindowState="Normal"
     mc:Ignorable="d">
     <Grid>
-        <wpf:WebView2 x:Name="wb" />
+        <wpf:WebView2 x:Name="webView" />
     </Grid>
 </Window>
