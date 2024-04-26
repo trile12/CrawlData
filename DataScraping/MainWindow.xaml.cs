@@ -2,7 +2,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Security.Policy;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -44,8 +43,6 @@ namespace DataScraping
 
         private void SearchClickedEvent(object sender, EventArgs e)
         {
-
-
         }
 
         private void CoreWebView2_WebResourceResponseReceived(object sender, CoreWebView2WebResourceResponseReceivedEventArgs e)
@@ -85,15 +82,15 @@ namespace DataScraping
             }
         }
 
-        private void CoreWebView2_DOMContentLoaded(object sender, Microsoft.Web.WebView2.Core.CoreWebView2DOMContentLoadedEventArgs e) { }
+        private void CoreWebView2_DOMContentLoaded(object sender, CoreWebView2DOMContentLoadedEventArgs e) { }
 
-        private async void webView_CoreWebView2InitializationCompleted(object sender, Microsoft.Web.WebView2.Core.CoreWebView2InitializationCompletedEventArgs e)
+        private async void webView_CoreWebView2InitializationCompleted(object sender, CoreWebView2InitializationCompletedEventArgs e)
         {
             webView.CoreWebView2.DOMContentLoaded += CoreWebView2_DOMContentLoaded;
             webView.CoreWebView2.WebResourceResponseReceived += CoreWebView2_WebResourceResponseReceived;
         }
 
-        private void webView_WebMessageReceived(object sender, Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
+        private void webView_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
             string message = e.TryGetWebMessageAsString();
             // Search button clicked

@@ -11,7 +11,7 @@
     Closed="Window_Closed"
     Loaded="Window_Loaded"
     WindowStartupLocation="CenterScreen"
-    WindowState="Maximized"
+    WindowState="Normal"
     mc:Ignorable="d">
     <Grid>
         <Grid.ColumnDefinitions>
