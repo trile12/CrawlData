@@ -1,4 +1,10 @@
-﻿using System;
+﻿using Microsoft.Web.WebView2.Core;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Security.Policy;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
 
@@ -9,8 +15,11 @@ namespace DataScraping
     /// </summary>
     public partial class MainWindow : Window
     {
-        public event EventHandler<bool> ButtonDisabledChanged;
-        public event EventHandler SearchClicked;
+        private event EventHandler<bool> ButtonDisabledChanged;
+        private event EventHandler SearchClicked;
+
+        private List<SearchTableModel> searchTables = new List<SearchTableModel>();
+        private bool _isButtonSearchClicked = false;
 
         public MainWindow()
         {
@@ -25,6 +34,7 @@ namespace DataScraping
 
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
+            Log("Loading page!!");
             webView.Source = new Uri("https://termene.ro/profil#/");
             webView.WebMessageReceived += webView_WebMessageReceived;
             webView.NavigationCompleted += webView_NavigationCompleted;
@@ -34,6 +44,45 @@ namespace DataScraping
 
         private void SearchClickedEvent(object sender, EventArgs e)
         {
+
+
+        }
+
+        private void CoreWebView2_WebResourceResponseReceived(object sender, CoreWebView2WebResourceResponseReceivedEventArgs e)
+        {
+            if (e.Request.Uri == "https://termene.ro/resources/processes/Pasp.prc.php?type=search" && _isButtonSearchClicked)
+            {
+                _isButtonSearchClicked = false;
+                var result = e.Response.GetContentAsync().GetAwaiter();
+                result.OnCompleted(() =>
+                {
+                    try
+                    {
+                        var res = result.GetResult();
+                        StreamReader reader = new StreamReader(res);
+                        string jsonString = reader.ReadToEnd();
+                        if (string.IsNullOrEmpty(jsonString)) return;
+
+                        var jsonObject = JsonDocument.Parse(jsonString);
+                        var dataArray = jsonObject.RootElement.GetProperty("data").GetProperty("data").EnumerateArray();
+                        searchTables.Clear();
+                        Log("===========Response Json Data===========");
+                        foreach (var item in dataArray)
+                        {
+                            var searchTableModel = new SearchTableModel
+                            {
+                                Cui = item.GetProperty("firma.cui").GetInt32(),
+                                Name = item.TryGetProperty("firma.nume", out var name) ? name.GetString() : null,
+                                Url = item.GetProperty("url").GetString()
+                            };
+                            Log(searchTableModel.Url);
+                            searchTables.Add(searchTableModel);
+                        }
+                        ProcessCrawlData();
+                    }
+                    catch { }
+                });
+            }
         }
 
         private void CoreWebView2_DOMContentLoaded(object sender, Microsoft.Web.WebView2.Core.CoreWebView2DOMContentLoadedEventArgs e) { }
@@ -41,6 +90,7 @@ namespace DataScraping
         private async void webView_CoreWebView2InitializationCompleted(object sender, Microsoft.Web.WebView2.Core.CoreWebView2InitializationCompletedEventArgs e)
         {
             webView.CoreWebView2.DOMContentLoaded += CoreWebView2_DOMContentLoaded;
+            webView.CoreWebView2.WebResourceResponseReceived += CoreWebView2_WebResourceResponseReceived;
         }
 
         private void webView_WebMessageReceived(object sender, Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
@@ -49,6 +99,8 @@ namespace DataScraping
             // Search button clicked
             if (message == "buttonClicked")
             {
+                Log("Search Clicked!!");
+                _isButtonSearchClicked = true;
                 SearchClicked?.Invoke(this, EventArgs.Empty);
             }
             else if (message == "acceptCookie")
@@ -59,9 +111,12 @@ namespace DataScraping
 
         private async void webView_NavigationCompleted(object sender, Microsoft.Web.WebView2.Core.CoreWebView2NavigationCompletedEventArgs e)
         {
-            await Task.Delay(500);
             string currentUrl = await webView.ExecuteScriptAsync("window.location.href");
-            if (currentUrl == "\"https://termene.ro/#/\"")
+            currentUrl = currentUrl.Trim('"');
+            string pattern = @"^https:\/\/termene\.ro\/firma\/\d+-[A-Z0-9-]+$";
+
+            Regex regex = new Regex(pattern);
+            if (currentUrl == "https://termene.ro/#/")
             {
                 await webView.CoreWebView2.ExecuteScriptAsync(@"
                     var button = document.querySelector('#c-right > a');
@@ -70,10 +125,13 @@ namespace DataScraping
                     } 
                     window.chrome.webview.postMessage('acceptCookie');
                 ");
+                Log("Accept Cookie");
                 return;
             }
-            else if (currentUrl == "\"https://termene.ro/autentificare\"")
+            else if (currentUrl == "https://termene.ro/autentificare")
             {
+                await Task.Delay(500);
+
                 await webView.CoreWebView2.ExecuteScriptAsync(@"
                     var element = document.querySelector('#emailOrPhone');
                     if (element) {
@@ -84,14 +142,23 @@ namespace DataScraping
 
                 await webView.ExecuteScriptAsync("document.querySelector('#emailOrPhone').value = 'office@it-setup.ro'");
                 await webView.ExecuteScriptAsync("document.querySelector('#emailOrPhone').dispatchEvent(new Event('input', { bubbles: true }))");
-                await webView.ExecuteScriptAsync("document.querySelector('#password').value = '1Ts3tup'");
+                await webView.ExecuteScriptAsync("document.querySelector('#password').value = 'Dukygeorge123'");
                 await webView.ExecuteScriptAsync("document.querySelector('#password').dispatchEvent(new Event('input', { bubbles: true }))");
                 await Task.Delay(300);
                 await webView.ExecuteScriptAsync("document.querySelector('#loginBtn').click()");
+                Log("Login!!");
             }
-            else if (currentUrl == "\"https://termene.ro/profil#/\"")
+            else if (currentUrl == "https://termene.ro/profil#/" || currentUrl == "https://termene.ro/profil/" || currentUrl.Contains("/profil"))
             {
+                await Task.Delay(500);
                 webView.Source = new Uri("https://termene.ro/ai360/pasp#/");
+                Log("Nav to pasp");
+            }
+            else if (regex.IsMatch(currentUrl))
+            {
+                Log($"=>>> nav to {currentUrl}");
+                Log("Processing crawl data");
+                Log("================= END =================");
             }
             else
             {
@@ -101,8 +168,26 @@ namespace DataScraping
                 document.evaluate(""/html/body/div[2]/main/div/div[1]/div/div[3]/div[2]/button[2]"", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue.addEventListener('click', function() {
                     window.chrome.webview.postMessage('buttonClicked');
                 });");
-                webView.NavigationCompleted -= webView_NavigationCompleted;
+
+                Log("click Prospectare piață");
+                Log("=>>> Please click on the search button");
             }
+        }
+
+        private async Task ProcessCrawlData()
+        {
+
+            foreach (var item in searchTables)
+            {
+                if (string.IsNullOrEmpty(item.Name)) continue;
+                webView.Source = new Uri(item.Url);
+                break;
+            }
+        }
+
+        private void Log(string logInfo)
+        {
+            LogTextBox.Text += logInfo + Environment.NewLine;
         }
     }
 }
