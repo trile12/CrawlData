@@ -22,7 +22,7 @@
         <TextBox
             x:Name="LogTextBox"
             Grid.Column="1"
-            FontSize="18"
+            FontSize="16"
             TextWrapping="Wrap"
             VerticalScrollBarVisibility="Auto" />
     </Grid>
