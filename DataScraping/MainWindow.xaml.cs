@@ -1,13 +1,16 @@
-﻿using Microsoft.Web.WebView2.Core;
+﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.Web.WebView2.Core;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using static System.Net.Mime.MediaTypeNames;
 
 namespace DataScraping
 {
@@ -16,6 +19,8 @@ namespace DataScraping
     /// </summary>
     public partial class MainWindow : Window
     {
+        #region PROPERTIES
+
         private readonly string userName = "office@it-setup.ro";
         private readonly string passWord = "Dukygeorge123";
 
@@ -31,11 +36,49 @@ namespace DataScraping
         private TaskCompletionSource<bool> taskCompletionGetExten;
         private TaskCompletionSource<bool> taskCompletionGetPage;
 
+        #endregion PROPERTIES
+
         public MainWindow()
         {
             InitializeComponent();
-
         }
+
+        private async Task ProcessCrawlData()
+        {
+            Log($"ProcessCrawlData - ({searchTables.Count})");
+            //Check and delete existing entries
+            var cuis = searchTables.Select(x => x.Cui).ToList();
+            List<string> cuisString = cuis.Select(i => i.ToString()).ToList();
+            var existCUIS = await GetExistingCUISAsync(cuisString);
+
+            foreach (var item in searchTables)
+            {
+                if (string.IsNullOrEmpty(item.Name)) continue;
+                if (existCUIS.Any() && existCUIS.Contains(item.Cui.ToString())) continue;
+                taskCompletionSource = new TaskCompletionSource<bool>();
+                taskCompletionGetOwner = new TaskCompletionSource<bool>();
+                taskCompletionGetExten = new TaskCompletionSource<bool>();
+                currentInfo = new DataInfo();
+                webView.Source = new Uri(item.Url);
+                await taskCompletionSource.Task;
+            }
+
+            Log($"================= DONE =================)");
+        }
+
+        private async Task<string> ExecuteScriptAndGetContent(string funtionName, string path)
+        {
+            string script = @" function " + funtionName + @"() {
+            return document.querySelector('" + path + "').textContent;}";
+            await webView.ExecuteScriptAsync(script);
+            string content = await webView.ExecuteScriptAsync(funtionName + "();");
+
+            content = content.Replace("\\n", "").Replace("\n", "").Trim('"').Trim();
+            content = Regex.Replace(content, @"\s+", " ").Trim();
+            return content;
+        }
+
+        #region EVENTS
 
         private void Window_Closed(object sender, EventArgs e)
         {
@@ -44,6 +87,11 @@ namespace DataScraping
 
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
+            using (var dbContext = new AppDbContext())
+            {
+                dbContext.Database.EnsureCreated();
+            }
+            string dbFilePath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "DS.db");
             Log("Loading page!!");
             webView.Source = new Uri("https://termene.ro/profil#/");
             //webView.Source = new Uri("https://termene.ro/firma/33787105-ECOREC-ALBA-SRL");
@@ -86,8 +134,6 @@ namespace DataScraping
                 await webView.ExecuteScriptAsync(scriptButton);
                 await taskCompletionGetPage.Task;
             }
-
-
 
             ProcessCrawlData();
         }
@@ -142,17 +188,13 @@ namespace DataScraping
                             if (string.IsNullOrEmpty(jsonString)) return;
                             var jsonObject = JsonDocument.Parse(jsonString);
                             var phones = jsonObject.RootElement.GetProperty("telefon").EnumerateArray();
-                            var sums = jsonObject.RootElement.GetProperty("sumarizare").EnumerateArray();
+                            //var sums = jsonObject.RootElement.GetProperty("sumarizare").EnumerateObject();
                             var emails = jsonObject.RootElement.GetProperty("email").EnumerateArray();
                             var webs = jsonObject.RootElement.GetProperty("adrese_web").EnumerateArray();
                             List<string> results = new List<string>();
                             foreach (JsonElement phone in phones)
                             {
                                 results.Add(phone.GetString());
-                            }
-                            foreach (JsonElement sum in sums)
-                            {
-                                results.Add(sum.GetString());
                             }
                             foreach (JsonElement email in emails)
                             {
@@ -165,10 +207,18 @@ namespace DataScraping
                             if (results.Any())
                                 currentInfo.ExtendedData = string.Join(",", results.ToArray());
 
-                            taskCompletionGetExten.SetResult(true);
+                            Log("get ExtendedData");
+                            //UpdateRecord(currentInfo);
                         }
                     }
-                    catch { }
+                    catch
+                    {
+                        Log("get ExtendedData failed");
+                    }
+                    finally
+                    {
+                        taskCompletionGetExten.SetResult(true);
+                    }
                 });
             }
             else if (e.Request.Uri.Contains("https://termene.ro/resources/requests/pageDetaliiFirma/associatesAdministrators.php?cui"))
@@ -195,19 +245,16 @@ namespace DataScraping
                             }
                             currentInfo.Owners = string.Join(",", numeList);
                             Log("get Owners");
-                            taskCompletionGetOwner.SetResult(true);
                         }
                     }
-                    catch { }
+                    catch { Log("get Owners failed"); }
+                    finally { taskCompletionGetOwner.SetResult(true); }
                 });
             }
         }
 
-        private void CoreWebView2_DOMContentLoaded(object sender, CoreWebView2DOMContentLoadedEventArgs e) { }
-
         private async void webView_CoreWebView2InitializationCompleted(object sender, CoreWebView2InitializationCompletedEventArgs e)
         {
-            webView.CoreWebView2.DOMContentLoaded += CoreWebView2_DOMContentLoaded;
             webView.CoreWebView2.WebResourceResponseReceived += CoreWebView2_WebResourceResponseReceived;
         }
 
@@ -240,7 +287,7 @@ namespace DataScraping
                     var button = document.querySelector('#c-right > a');
                     if (button) {
                         button.click();
-                    } 
+                    }
                     window.chrome.webview.postMessage('acceptCookie');
                 ");
                 Log("Accept Cookie");
@@ -274,10 +321,8 @@ namespace DataScraping
             }
             else if (regex.IsMatch(currentUrl))
             {
-                await Task.Delay(1500);
                 Log($"=>>> nav to {currentUrl}");
                 Log("Processing crawl data");
-
                 do
                 {
                     currentInfo.CompanyName = await ExecuteScriptAndGetContent("getCompanyName", "#tailwind h1 div:nth-child(1) div:nth-child(2) span");
@@ -287,6 +332,13 @@ namespace DataScraping
                 {
                     currentInfo.CUI = await ExecuteScriptAndGetContent("getCUI", "#tailwind > div.col-12.col-sm-7 > div:nth-child(2) > div:nth-child(2) > div");
                 } while (string.IsNullOrEmpty(currentInfo.CUI) || currentInfo.CUI == "null");
+
+                if (CheckCUIIsExist(currentInfo.CUI))
+                {
+                    Log("Already Exist !!");
+                    taskCompletionSource.SetResult(true);
+                    return;
+                }
 
                 currentInfo.RegistDate = await ExecuteScriptAndGetContent("getRegistDate", "#tailwind > div.col-12.col-sm-7 > div:nth-child(2) > div:nth-child(4) > div");
                 currentInfo.MFINANCE = await ExecuteScriptAndGetContent("getMFINANCE", "#tailwind > div.col-12.col-sm-7 > div:nth-child(2) > div:nth-child(6) > div");
@@ -299,14 +351,15 @@ namespace DataScraping
                 currentInfo.Phone = await ExecuteScriptAndGetContent("getPhone", "#go-contact-info > div > div:nth-child(2) > div > div.col-12.col-sm-7 > div:nth-child(1) > div.col-8");
                 currentInfo.Email = await ExecuteScriptAndGetContent("getEmail", "#go-contact-info > div > div:nth-child(2) > div > div.col-12.col-sm-7 > div:nth-child(2) > div.col-8");
                 currentInfo.Web = await ExecuteScriptAndGetContent("getWeb", "#go-contact-info > div > div:nth-child(2) > div > div.col-12.col-sm-7 > div:nth-child(3) > div.col-8");
-                //currentInfo.ExtendedData = await ExecuteScriptAndGetContent("getExtendedData", "#go-extended-contact-info > div.box__default.pb-4 > div > div > div.row.mt-1");
                 currentInfo.NrOfBranches = await ExecuteScriptAndGetContent("getNrOfBranches", "#tailwind > h2 > span:nth-child(2)");
+                currentInfo.Url = currentUrl;
 
-                //await taskCompletionGetOwner.Task;
-                //await taskCompletionGetExten.Task;
+                await taskCompletionGetOwner.Task;
+                await taskCompletionGetExten.Task;
 
                 listInfo.Add(currentInfo);
-                Log("Add list!!");
+                AddRecord(currentInfo);
+                Log("Add Record !!");
                 taskCompletionSource.SetResult(true);
             }
             else
@@ -323,19 +376,62 @@ namespace DataScraping
             }
         }
 
-        private async Task ProcessCrawlData()
+        #endregion EVENTS
+
+        #region AppDbContext
+
+        private void AddRecord(DataInfo dataInfo)
         {
-            Log($"ProcessCrawlData - ({searchTables.Count})");
-            foreach (var item in searchTables)
+            using (var dbContext = new AppDbContext())
             {
-                if (string.IsNullOrEmpty(item.Name)) continue;
-                taskCompletionSource = new TaskCompletionSource<bool>();
-                taskCompletionGetOwner = new TaskCompletionSource<bool>();
-                taskCompletionGetExten = new TaskCompletionSource<bool>();
-                currentInfo = new DataInfo();
-                webView.Source = new Uri(item.Url);
-                await taskCompletionSource.Task;
+                dataInfo.Id = Guid.NewGuid();
+                dbContext.DataInfos.Add(dataInfo);
+                dbContext.SaveChanges();
             }
+        }
+
+        private void UpdateRecord(DataInfo dataInfo)
+        {
+            using (var dbContext = new AppDbContext())
+            {
+                var existingRecord = dbContext.DataInfos.FirstOrDefault(d => d.CUI == dataInfo.CUI);
+                if (existingRecord != null)
+                {
+                    existingRecord.ExtendedData = dataInfo.ExtendedData;
+                    dbContext.SaveChanges();
+                }
+            }
+        }
+
+        private bool CheckCUIIsExist(string cui)
+        {
+            using (var dbContext = new AppDbContext())
+            {
+                return dbContext.DataInfos.AsNoTracking().Any(d => d.CUI == cui);
+            }
+        }
+
+        private async Task<List<string>> GetExistingCUISAsync(List<string> cuis)
+        {
+            using (var dbContext = new AppDbContext())
+            {
+                var existingCUIS = await dbContext.DataInfos
+                    .AsNoTracking()
+                    .Where(x => cuis.Contains(x.CUI))
+                    .Select(x => x.CUI)
+                    .ToListAsync();
+
+                return existingCUIS;
+            }
+        }
+
+        #endregion AppDbContext
+
+        #region LOG
+
+        private void LogTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            LogTextBox.ScrollToEnd();
         }
 
         private void Log(string logInfo)
@@ -343,15 +439,6 @@ namespace DataScraping
             LogTextBox.Text += logInfo + Environment.NewLine;
         }
 
-        private async Task<string> ExecuteScriptAndGetContent(string funtionName, string path)
-        {
-            string script = @" function " + funtionName + @"() {
-            return document.querySelector('" + path + "').textContent;}";
-            await webView.ExecuteScriptAsync(script);
-            string content = await webView.ExecuteScriptAsync(funtionName + "();");
-
-            content = content.Replace("\\n", "").Replace("\n", "").Trim('"').Trim();
-            return content;
-        }
+        #endregion LOG
     }
 }
