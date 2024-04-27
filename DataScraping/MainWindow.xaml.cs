@@ -2,15 +2,14 @@
 using Microsoft.Web.WebView2.Core;
 using System;
 using System.Collections.Generic;
+using System.Configuration;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using static System.Net.Mime.MediaTypeNames;
 
 namespace DataScraping
 {
@@ -21,26 +20,42 @@ namespace DataScraping
     {
         #region PROPERTIES
 
-        private readonly string userName = "office@it-setup.ro";
-        private readonly string passWord = "Dukygeorge123";
-
-        private event EventHandler SearchClicked;
-
-        private List<SearchTableModel> searchTables = new List<SearchTableModel>();
+        private readonly string passWord = ConfigurationManager.AppSettings["password"].ToString();
+        private readonly string userName = ConfigurationManager.AppSettings["username"].ToString();
         private bool _isButtonSearchClicked = false;
+
         private DataInfo currentInfo = new DataInfo();
+
         private List<DataInfo> listInfo = new List<DataInfo>();
 
-        private TaskCompletionSource<bool> taskCompletionSource;
-        private TaskCompletionSource<bool> taskCompletionGetOwner;
+        private List<SearchTableModel> searchTables = new List<SearchTableModel>();
+
         private TaskCompletionSource<bool> taskCompletionGetExten;
+
+        private TaskCompletionSource<bool> taskCompletionGetOwner;
+
         private TaskCompletionSource<bool> taskCompletionGetPage;
 
+        private TaskCompletionSource<bool> taskCompletionSource;
+
+        private event EventHandler SearchClicked;
         #endregion PROPERTIES
 
         public MainWindow()
         {
             InitializeComponent();
+        }
+
+        private async Task<string> ExecuteScriptAndGetContent(string funtionName, string path)
+        {
+            string script = @" function " + funtionName + @"() {
+            return document.querySelector('" + path + "').textContent;}";
+            await webView.ExecuteScriptAsync(script);
+            string content = await webView.ExecuteScriptAsync(funtionName + "();");
+
+            content = content.Replace("\\n", "").Replace("\n", "").Trim('"').Trim();
+            content = Regex.Replace(content, @"\s+", " ").Trim();
+            return content;
         }
 
         private async Task ProcessCrawlData()
@@ -65,78 +80,7 @@ namespace DataScraping
 
             Log($"================= DONE =================)");
         }
-
-        private async Task<string> ExecuteScriptAndGetContent(string funtionName, string path)
-        {
-            string script = @" function " + funtionName + @"() {
-            return document.querySelector('" + path + "').textContent;}";
-            await webView.ExecuteScriptAsync(script);
-            string content = await webView.ExecuteScriptAsync(funtionName + "();");
-
-            content = content.Replace("\\n", "").Replace("\n", "").Trim('"').Trim();
-            content = Regex.Replace(content, @"\s+", " ").Trim();
-            return content;
-        }
-
         #region EVENTS
-
-        private void Window_Closed(object sender, EventArgs e)
-        {
-            webView?.Dispose();
-        }
-
-        private async void Window_Loaded(object sender, RoutedEventArgs e)
-        {
-            using (var dbContext = new AppDbContext())
-            {
-                dbContext.Database.EnsureCreated();
-            }
-            string dbFilePath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "DS.db");
-            Log("Loading page!!");
-            webView.Source = new Uri("https://termene.ro/profil#/");
-            //webView.Source = new Uri("https://termene.ro/firma/33787105-ECOREC-ALBA-SRL");
-            webView.WebMessageReceived += webView_WebMessageReceived;
-            webView.NavigationCompleted += webView_NavigationCompleted;
-            webView.CoreWebView2InitializationCompleted += webView_CoreWebView2InitializationCompleted;
-            SearchClicked += SearchClickedEvent;
-        }
-
-        private async void SearchClickedEvent(object sender, EventArgs e)
-        {
-            searchTables.Clear();
-            LogTextBox.Text = "";
-            taskCompletionGetPage = new TaskCompletionSource<bool>();
-            await taskCompletionGetPage.Task;
-            string script = @"
-                        var paginationNav = document.querySelector('#app > main > div > div.col-10.col-sm-9 > div:nth-child(3) > div.mt-3.text-end > nav');
-                        var buttons = paginationNav.querySelectorAll('button');
-                        var selectors = [];
-                        buttons.forEach(function(button) {
-                            var selector = '';
-                            selector = button.nodeName.toLowerCase();
-                            if (button.id) {
-                                selector += '#' + button.id;
-                            } else if (button.classList.length > 0) {
-                                selector += '.' + button.classList[0];
-                            }
-                            selectors.push(selector);
-                        });
-                        selectors.join(',');";
-            string querySelectors = await webView.ExecuteScriptAsync(script);
-
-            string[] selectorArray = querySelectors.Split(',');
-            for (int i = 1; i < selectorArray.Length; i++)
-            {
-                taskCompletionGetPage = new TaskCompletionSource<bool>();
-                _isButtonSearchClicked = true;
-                string scriptButton = @"
-                             var button = document.querySelector('#app > main > div > div.col-10.col-sm-9 > div:nth-child(3) > div.mt-3.text-end > nav > ul > li:nth-child(" + $"{i + 1}" + ") > button'); if (button) { button.click(); }";
-                await webView.ExecuteScriptAsync(scriptButton);
-                await taskCompletionGetPage.Task;
-            }
-
-            ProcessCrawlData();
-        }
 
         private void CoreWebView2_WebResourceResponseReceived(object sender, CoreWebView2WebResourceResponseReceivedEventArgs e)
         {
@@ -253,25 +197,46 @@ namespace DataScraping
             }
         }
 
+        private async void SearchClickedEvent(object sender, EventArgs e)
+        {
+            searchTables.Clear();
+            LogTextBox.Text = "";
+            taskCompletionGetPage = new TaskCompletionSource<bool>();
+            await taskCompletionGetPage.Task;
+            string script = @"
+                        var paginationNav = document.querySelector('#app > main > div > div.col-10.col-sm-9 > div:nth-child(3) > div.mt-3.text-end > nav');
+                        var buttons = paginationNav.querySelectorAll('button');
+                        var selectors = [];
+                        buttons.forEach(function(button) {
+                            var selector = '';
+                            selector = button.nodeName.toLowerCase();
+                            if (button.id) {
+                                selector += '#' + button.id;
+                            } else if (button.classList.length > 0) {
+                                selector += '.' + button.classList[0];
+                            }
+                            selectors.push(selector);
+                        });
+                        selectors.join(',');";
+            string querySelectors = await webView.ExecuteScriptAsync(script);
+
+            string[] selectorArray = querySelectors.Split(',');
+            for (int i = 1; i < selectorArray.Length; i++)
+            {
+                taskCompletionGetPage = new TaskCompletionSource<bool>();
+                _isButtonSearchClicked = true;
+                string scriptButton = @"
+                             var button = document.querySelector('#app > main > div > div.col-10.col-sm-9 > div:nth-child(3) > div.mt-3.text-end > nav > ul > li:nth-child(" + $"{i + 1}" + ") > button'); if (button) { button.click(); }";
+                await webView.ExecuteScriptAsync(scriptButton);
+                await taskCompletionGetPage.Task;
+            }
+
+            ProcessCrawlData();
+        }
+
         private async void webView_CoreWebView2InitializationCompleted(object sender, CoreWebView2InitializationCompletedEventArgs e)
         {
             webView.CoreWebView2.WebResourceResponseReceived += CoreWebView2_WebResourceResponseReceived;
-        }
-
-        private void webView_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
-        {
-            string message = e.TryGetWebMessageAsString();
-            // Search button clicked
-            if (message == "buttonClicked")
-            {
-                Log("Search Clicked!!");
-                _isButtonSearchClicked = true;
-                SearchClicked?.Invoke(this, EventArgs.Empty);
-            }
-            else if (message == "acceptCookie")
-            {
-                webView.Source = new Uri("https://termene.ro/autentificare");
-            }
         }
 
         private async void webView_NavigationCompleted(object sender, Microsoft.Web.WebView2.Core.CoreWebView2NavigationCompletedEventArgs e)
@@ -376,6 +341,42 @@ namespace DataScraping
             }
         }
 
+        private void webView_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
+        {
+            string message = e.TryGetWebMessageAsString();
+            // Search button clicked
+            if (message == "buttonClicked")
+            {
+                Log("Search Clicked!!");
+                _isButtonSearchClicked = true;
+                SearchClicked?.Invoke(this, EventArgs.Empty);
+            }
+            else if (message == "acceptCookie")
+            {
+                webView.Source = new Uri("https://termene.ro/autentificare");
+            }
+        }
+
+        private void Window_Closed(object sender, EventArgs e)
+        {
+            webView?.Dispose();
+        }
+
+        private async void Window_Loaded(object sender, RoutedEventArgs e)
+        {
+            using (var dbContext = new AppDbContext())
+            {
+                dbContext.Database.EnsureCreated();
+            }
+            string dbFilePath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "DS.db");
+            Log("Loading page!!");
+            webView.Source = new Uri("https://termene.ro/profil#/");
+            //webView.Source = new Uri("https://termene.ro/firma/33787105-ECOREC-ALBA-SRL");
+            webView.WebMessageReceived += webView_WebMessageReceived;
+            webView.NavigationCompleted += webView_NavigationCompleted;
+            webView.CoreWebView2InitializationCompleted += webView_CoreWebView2InitializationCompleted;
+            SearchClicked += SearchClickedEvent;
+        }
         #endregion EVENTS
 
         #region AppDbContext
@@ -387,19 +388,6 @@ namespace DataScraping
                 dataInfo.Id = Guid.NewGuid();
                 dbContext.DataInfos.Add(dataInfo);
                 dbContext.SaveChanges();
-            }
-        }
-
-        private void UpdateRecord(DataInfo dataInfo)
-        {
-            using (var dbContext = new AppDbContext())
-            {
-                var existingRecord = dbContext.DataInfos.FirstOrDefault(d => d.CUI == dataInfo.CUI);
-                if (existingRecord != null)
-                {
-                    existingRecord.ExtendedData = dataInfo.ExtendedData;
-                    dbContext.SaveChanges();
-                }
             }
         }
 
@@ -425,20 +413,31 @@ namespace DataScraping
             }
         }
 
+        private void UpdateRecord(DataInfo dataInfo)
+        {
+            using (var dbContext = new AppDbContext())
+            {
+                var existingRecord = dbContext.DataInfos.FirstOrDefault(d => d.CUI == dataInfo.CUI);
+                if (existingRecord != null)
+                {
+                    existingRecord.ExtendedData = dataInfo.ExtendedData;
+                    dbContext.SaveChanges();
+                }
+            }
+        }
         #endregion AppDbContext
 
         #region LOG
-
-        private void LogTextBox_TextChanged(object sender, TextChangedEventArgs e)
-        {
-            LogTextBox.ScrollToEnd();
-        }
 
         private void Log(string logInfo)
         {
             LogTextBox.Text += logInfo + Environment.NewLine;
         }
 
+        private void LogTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            LogTextBox.ScrollToEnd();
+        }
         #endregion LOG
     }
 }
